@@ -51,8 +51,12 @@ calendars:
     count: 2          # nombre d'événements pour ce calendrier
     icon: "🗑️"        # facultatif
     name: Poubelles   # facultatif
+  - entity: calendar.anniversaires
+    period: month     # seulement les événements du mois en cours (tous)
 events_count: 3
 events_days: 60
 ```
+
+Avec `period: month`, le calendrier n'affiche que ses événements du mois en cours, d'aujourd'hui à la fin du mois (tous, sauf si `count` est précisé) ; le mois suivant, la liste se renouvelle d'elle-même.
 
 L'icône est devinée d'après le titre : 🎂 anniversaire, ♻️ tri / poubelle jaune, 🍾 verre, 🌿 déchets verts, 🛋️ encombrants, 🗑️ ordures, 📅 sinon. Les calendriers sont relus toutes les 15 minutes, à chaque changement et à minuit.

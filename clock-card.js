@@ -4,7 +4,7 @@
  * en toutes lettres, minimaliste. Heure du fuseau de Home Assistant, date en français, 12 / 24 h, secondes.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.1.1";
+const CARD_VERSION = "1.2.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -125,8 +125,10 @@ class ClockCard extends HTMLElement {
       const list = (this._events || []).filter((e) => e.ci === ci)
         // un événement terminé disparaît ; un événement de plusieurs jours en cours reste affiché
         .filter((e) => e.allDay ? dnum(e.endYmd) > t0 || (e.endYmd === e.ymd && dnum(e.ymd) >= t0) : (e.t || 0) >= now - 3600000 || dnum(e.endYmd) > t0)
+        // period: month → seulement les événements du mois en cours (tous, sauf si count est précisé)
+        .filter((e) => cal.period !== "month" || e.ymd.slice(0, 7) === today.slice(0, 7) || dnum(e.ymd) <= t0)
         .sort((a, b) => dnum(a.ymd) - dnum(b.ymd) || (a.t || 0) - (b.t || 0))
-        .slice(0, Math.max(1, Number(cal.count) || defCount));
+        .slice(0, Math.max(1, Number(cal.count) || (cal.period === "month" ? 31 : defCount)));
       list.forEach((e) => {
         const dd = dnum(e.ymd) - t0;
         const ic = cal.icon || (EV_ICONS.find(([re]) => re.test(e.title)) || EV_ICONS.find(([re]) => re.test(calName)) || [0, "📅"])[1];
