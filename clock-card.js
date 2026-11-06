@@ -4,7 +4,7 @@
  * en toutes lettres, minimaliste. Heure du fuseau de Home Assistant, date en français, 12 / 24 h, secondes.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -36,7 +36,11 @@ const GV_FIELDS = [
   { name: "intensite", selector: { number: { min: 0, max: 2, step: 0.1, mode: "slider" } } }];
 const GV_LABELS = { nuance: "Nuance de couleur", nuance_perso: "Couleur personnalisée (nuance « Personnalisée »)", intensite: "Intensité de la nuance" };
 /* === FIN NUANCE COMMUNE === */
-const DEFAULTS = { style: "digital", theme: "auto", ...GV_DEFAULTS, hour12: false, show_seconds: true, show_date: true, show_greeting: true, show_info: true, sun_entity: "sun.sun" };
+const DEFAULTS = { style: "digital", theme: "auto", ...GV_DEFAULTS, hour12: false, show_seconds: true, show_date: true, show_greeting: true, show_info: true, sun_entity: "sun.sun",
+  calendars: [], events_count: 3, events_days: 60, events_title: "À venir" };
+/* icône devinée d'après le titre de l'événement ou le nom du calendrier */
+const EV_ICONS = [[/anniv|birthday|🎂/i, "🎂"], [/verre/i, "🍾"], [/tri|recycl|jaune|emballage/i, "♻️"], [/vert|d[ée]chets? verts?|jardin/i, "🌿"], [/encombrant/i, "🛋️"],
+  [/poubelle|ordure|d[ée]chet|collecte|ramassage|bac|benne/i, "🗑️"], [/f[ée]ri[ée]|vacances|cong[ée]/i, "🏖️"], [/rdv|rendez|m[ée]decin|dentiste/i, "🩺"]];
 const STYLES = [["digital", "Digitale en verre"], ["analog", "Analogique"], ["flip", "À volets (flip)"], ["day", "Journée et soleil"], ["words", "En toutes lettres"], ["minimal", "Minimaliste"]];
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -65,10 +69,78 @@ class ClockCard extends HTMLElement {
     const sun = hass.states[this._config.sun_entity];
     const sig = (this._isDark() ? "d" : "l") + (sun ? sun.state + (sun.attributes.next_rising || "") + (sun.attributes.next_setting || "") : "");
     if (sig !== this._sig) { this._sig = sig; this._render(); }
+    const cals = this._cals();
+    const csig = cals.map((x) => { const st = hass.states[x.entity]; return st ? st.state + (st.attributes.start_time || "") + (st.attributes.message || "") : "x"; }).join(";");
+    if (cals.length && csig !== this._csig) { this._csig = csig; this._fetchEvents(); }
   }
 
-  connectedCallback() { this._timer = setInterval(() => this._tick(), 250); if (this._config && !this._hass) { this._standalone = true; this._render(); } }
-  disconnectedCallback() { clearInterval(this._timer); }
+  connectedCallback() {
+    // calendriers relus toutes les 15 minutes (et à chaque changement d'état d'un calendrier)
+    this._evTimer = setInterval(() => this._fetchEvents(), 15 * 60000);
+    this._timer = setInterval(() => this._tick(), 250); if (this._config && !this._hass) { this._standalone = true; this._render(); } }
+  disconnectedCallback() { clearInterval(this._timer); clearInterval(this._evTimer); }
+
+  /* ---------- calendriers (anniversaires, ramassage des ordures…) ---------- */
+  _cals() {
+    const c = this._config, l = Array.isArray(c && c.calendars) ? c.calendars : (c && c.calendars ? [c.calendars] : []);
+    return l.map((x) => (typeof x === "string" ? { entity: x } : x || {})).filter((x) => x.entity && String(x.entity).startsWith("calendar."));
+  }
+  _ymdTz(d) {
+    try { const p = new Intl.DateTimeFormat("en-CA", { timeZone: this._tz(), year: "numeric", month: "2-digit", day: "2-digit" }).format(d); return p; }
+    catch (e) { return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
+  }
+  async _fetchEvents() {
+    const h = this._hass, cals = this._cals();
+    if (!h || !cals.length || this._evBusy) return;
+    this._evBusy = true;
+    const days = Math.max(1, Math.min(400, Number(this._config.events_days) || 60));
+    const start = new Date(Date.now() - 86400000), end = new Date(Date.now() + days * 86400000);
+    const out = [];
+    await Promise.all(cals.map(async (cal, ci) => {
+      try {
+        const evs = await h.callApi("GET", `calendars/${encodeURIComponent(cal.entity)}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`);
+        (evs || []).forEach((e) => {
+          const allDay = !!(e.start && e.start.date && !e.start.dateTime);
+          const ymd = allDay ? e.start.date : this._ymdTz(new Date(e.start.dateTime || e.start));
+          const endYmd = e.end ? (e.end.date ? e.end.date : this._ymdTz(new Date(e.end.dateTime || e.end))) : ymd;
+          out.push({ ci, title: String(e.summary || "Événement"), ymd, endYmd, allDay, t: allDay ? null : Date.parse(e.start.dateTime || e.start) });
+        });
+      } catch (err) { /* calendrier indisponible : on l'ignore */ }
+    }));
+    this._evBusy = false;
+    const key = JSON.stringify(out);
+    if (key !== this._evKey) { this._evKey = key; this._events = out; this._render(); }
+  }
+  _evHtml(n) {
+    const cals = this._cals();
+    if (!cals.length) return "";
+    const today = `${n.y}-${p2(n.mo)}-${p2(n.da)}`;
+    const dnum = (ymd) => { const [y, m, d] = ymd.split("-").map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+    const t0 = dnum(today), now = n.d.getTime();
+    const defCount = Math.max(1, Number(this._config.events_count) || 3);
+    const rows = [];
+    cals.forEach((cal, ci) => {
+      const st = this._hass && this._hass.states[cal.entity];
+      const calName = cal.name || (st && st.attributes.friendly_name) || "";
+      const list = (this._events || []).filter((e) => e.ci === ci)
+        // un événement terminé disparaît ; un événement de plusieurs jours en cours reste affiché
+        .filter((e) => e.allDay ? dnum(e.endYmd) > t0 || (e.endYmd === e.ymd && dnum(e.ymd) >= t0) : (e.t || 0) >= now - 3600000 || dnum(e.endYmd) > t0)
+        .sort((a, b) => dnum(a.ymd) - dnum(b.ymd) || (a.t || 0) - (b.t || 0))
+        .slice(0, Math.max(1, Number(cal.count) || defCount));
+      list.forEach((e) => {
+        const dd = dnum(e.ymd) - t0;
+        const ic = cal.icon || (EV_ICONS.find(([re]) => re.test(e.title)) || EV_ICONS.find(([re]) => re.test(calName)) || [0, "📅"])[1];
+        const when = dd < 0 ? "En cours" : dd === 0 ? "Aujourd'hui" : dd === 1 ? "Demain" : dd < 7 ? `Dans ${dd} jours`
+          : cap(new Intl.DateTimeFormat(this._lang(), { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" }).format(new Date(dnum(e.ymd) * 86400000 + 43200000)));
+        const hour = !e.allDay && e.t && dd <= 1 ? ` · ${this._hm(e.t)}` : "";
+        rows.push({ dd, html: `<div class="ev ${dd <= 0 ? "now" : dd === 1 ? "soon" : ""}"><span class="ei">${esc(ic)}</span><span class="et">${esc(e.title)}</span><span class="ew">${esc(when + hour)}</span></div>` });
+      });
+    });
+    rows.sort((a, b) => a.dd - b.dd); // tous les calendriers mélangés, du plus proche au plus lointain
+    const title = this._config.events_title;
+    if (!rows.length) return `<div class="evts glass">${title ? `<div class="eh">${esc(title)}</div>` : ""}<div class="ev empty">${this._events ? "Rien de prévu" : "Chargement…"}</div></div>`;
+    return `<div class="evts glass">${title ? `<div class="eh">${esc(title)}</div>` : ""}${rows.map((r) => r.html).join("")}</div>`;
+  }
   getCardSize() { return this._config && this._config.style === "analog" ? 5 : 3; }
 
   _isDark() {
@@ -221,10 +293,18 @@ class ClockCard extends HTMLElement {
       .sec { font-size:1.1em; color:var(--ck-accent); font-weight:700; font-variant-numeric:tabular-nums; } .dt { color:var(--ck-muted); font-weight:600; margin-top:.3em; }
       .pbar { width:70%; height:4px; border-radius:2px; background:var(--ck-glass-b); margin-top:.9em; overflow:hidden; } .pbar u { display:block; height:100%; border-radius:2px; background:linear-gradient(90deg,var(--ck-warm),var(--ck-accent)); text-decoration:none; } .ptx { font-size:.75em; color:var(--ck-muted); }
       @container (max-width:300px) { .bigt { font-size:3.8em; } }
+      /* à venir (calendriers) */
+      .evts { display:flex; flex-direction:column; gap:.15em; padding:8px 12px; border-radius:16px; font-size:.86em; }
+      .eh { font-size:.78em; text-transform:uppercase; letter-spacing:.08em; color:var(--ck-muted); margin:.1em 0 .25em; }
+      .ev { display:flex; align-items:center; gap:.6em; padding:.3em 0; } .ev + .ev { border-top:1px solid var(--ck-glass-b); }
+      .ei { flex:none; width:1.4em; text-align:center; } .et { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .ew { flex:none; color:var(--ck-muted); font-size:.92em; font-variant-numeric:tabular-nums; }
+      .ev.now .ew { color:var(--ck-accent); font-weight:700; } .ev.soon .ew { color:var(--ck-warm); font-weight:700; } .ev.empty { color:var(--ck-muted); justify-content:center; }
       @keyframes ck-bl { 50% { opacity:.25; } } @keyframes ck-flip { 0% { transform:scaleY(.1); opacity:.3; } 100% { transform:scaleY(1); opacity:1; } }
       @media (prefers-reduced-motion: reduce) { .colon, .bigt i, .fl.go span { animation:none; } }
     </style>
-    <ha-card class="${dark ? "dark" : "light"}" style="${gvStyle(c, dark)}">${this._body(n)}</ha-card>`;
+    <ha-card class="${dark ? "dark" : "light"}" style="${gvStyle(c, dark)}">${this._body(n)}${this._evHtml(n)}</ha-card>`;
+    this._day = `${n.y}-${n.mo}-${n.da}`;
     this._prev = {};
     this._tick(true);
   }
@@ -237,6 +317,7 @@ class ClockCard extends HTMLElement {
     const n = this._now(), hh = this._hh(n), mm = p2(n.m), ss = p2(n.s), st = c.style;
     const ampm = c.hour12 ? (n.h < 12 ? "AM" : "PM") : "";
     const key = `${n.d.getMinutes()}|${n.s}`;
+    if (this._day && this._day !== `${n.y}-${n.mo}-${n.da}`) { this._day = `${n.y}-${n.mo}-${n.da}`; if (this._cals().length) { this._render(); this._fetchEvents(); return; } }
     if (st === "analog") {
       const hand = (k, a) => { const el = root.querySelector(`[data-hand="${k}"]`); if (el) el.setAttribute("transform", `rotate(${a.toFixed(2)})`); };
       hand("h", ((n.h % 12) + n.m / 60 + n.s / 3600) * 30); hand("m", (n.m + n.s / 60) * 6); hand("s", (n.s + n.ms / 1000) * 6);
@@ -288,13 +369,16 @@ class ClockCard extends HTMLElement {
 
 /* ---------- Éditeur visuel ---------- */
 const LABELS = { ...GV_LABELS, style: "Style de l'horloge", theme: "Thème", hour12: "Format 12 h (AM / PM)", show_seconds: "Afficher les secondes", show_date: "Afficher la date",
-  show_greeting: "Afficher « Bonjour / Bonsoir » (style digital)", show_info: "Afficher la ligne d'infos (soleil, semaine)", sun_entity: "Entité du soleil (styles digital, volets, journée)" };
+  show_greeting: "Afficher « Bonjour / Bonsoir » (style digital)", show_info: "Afficher la ligne d'infos (soleil, semaine)", sun_entity: "Entité du soleil (styles digital, volets, journée)",
+  calendars: "Calendriers à afficher (anniversaires, ramassage des ordures…)", events_count: "Événements par calendrier", events_days: "Chercher sur combien de jours", events_title: "Titre du bloc (vide = aucun)" };
 const SCHEMA = [
   { name: "style", selector: { select: { mode: "dropdown", options: STYLES.map(([value, label]) => ({ value, label })) } } },
   { name: "theme", selector: { select: { mode: "dropdown", options: [{ value: "auto", label: "Automatique" }, { value: "light", label: "Clair" }, { value: "dark", label: "Sombre" }] } } },
   { type: "grid", name: "", schema: [{ name: "hour12", selector: { boolean: {} } }, { name: "show_seconds", selector: { boolean: {} } }, { name: "show_date", selector: { boolean: {} } },
     { name: "show_greeting", selector: { boolean: {} } }, { name: "show_info", selector: { boolean: {} } }] },
   { name: "sun_entity", selector: { entity: { domain: "sun" } } },
+  { name: "calendars", selector: { entity: { domain: "calendar", multiple: true } } },
+  { type: "grid", name: "", schema: [{ name: "events_count", selector: { number: { min: 1, max: 10, mode: "box" } } }, { name: "events_days", selector: { number: { min: 1, max: 400, mode: "box" } } }, { name: "events_title", selector: { text: {} } }] },
   { type: "expandable", name: "", title: "Nuance de couleur", schema: GV_FIELDS },
 ];
 

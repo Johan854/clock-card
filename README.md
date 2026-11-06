@@ -33,5 +33,26 @@ show_seconds: true
 | `show_greeting` | `true` | Salutation (style `digital`) |
 | `show_info` | `true` | Ligne d'infos soleil / semaine (`digital`, `flip`) |
 | `sun_entity` | `sun.sun` | Entité du soleil (`digital`, `flip`, `day`) |
+| `calendars` | — | Calendriers dont les prochains événements s'affichent sous l'horloge (tous les styles) |
+| `events_count` | `3` | Nombre d'événements par calendrier |
+| `events_days` | `60` | Jusqu'à combien de jours chercher |
+| `events_title` | `À venir` | Titre du bloc (vide = pas de titre) |
 
 Le bloc « Nuance de couleur » de l'éditeur est identique à celui des autres cartes. L'heure suit le fuseau de Home Assistant.
+
+## Prochains événements : anniversaires, ramassage des ordures… (v1.1.0)
+
+Sous l'horloge, un bloc « À venir » liste les prochains événements de vos calendriers Home Assistant (Google, CalDAV, calendrier local, collecte des déchets…), triés du plus proche au plus lointain : « Aujourd'hui », « Demain », « Dans 3 jours », puis la date.
+
+```yaml
+calendars:
+  - calendar.anniversaires
+  - entity: calendar.collecte_des_dechets
+    count: 2          # nombre d'événements pour ce calendrier
+    icon: "🗑️"        # facultatif
+    name: Poubelles   # facultatif
+events_count: 3
+events_days: 60
+```
+
+L'icône est devinée d'après le titre : 🎂 anniversaire, ♻️ tri / poubelle jaune, 🍾 verre, 🌿 déchets verts, 🛋️ encombrants, 🗑️ ordures, 📅 sinon. Les calendriers sont relus toutes les 15 minutes, à chaque changement et à minuit.
