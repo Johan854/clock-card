@@ -4,7 +4,7 @@
  * en toutes lettres, minimaliste. Heure du fuseau de Home Assistant, date en français, 12 / 24 h, secondes.
  * Style verre, thème clair/sombre automatique, éditeur visuel, textes en français.
  */
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 
 /* === NUANCE COMMUNE v2 (cartes Johan854) ===
  * Bloc identique dans toutes les cartes. Options : nuance, nuance_perso, intensite.
@@ -130,7 +130,7 @@ class ClockCard extends HTMLElement {
       list.forEach((e) => {
         const dd = dnum(e.ymd) - t0;
         const ic = cal.icon || (EV_ICONS.find(([re]) => re.test(e.title)) || EV_ICONS.find(([re]) => re.test(calName)) || [0, "📅"])[1];
-        const when = dd < 0 ? "En cours" : dd === 0 ? "Aujourd'hui" : dd === 1 ? "Demain" : dd < 7 ? `Dans ${dd} jours`
+        const when = dd <= 0 ? "Aujourd'hui" : dd === 1 ? "Demain" : dd < 7 ? `Dans ${dd} jours`
           : cap(new Intl.DateTimeFormat(this._lang(), { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" }).format(new Date(dnum(e.ymd) * 86400000 + 43200000)));
         const hour = !e.allDay && e.t && dd <= 1 ? ` · ${this._hm(e.t)}` : "";
         rows.push({ dd, html: `<div class="ev ${dd <= 0 ? "now" : dd === 1 ? "soon" : ""}"><span class="ei">${esc(ic)}</span><span class="et">${esc(e.title)}</span><span class="ew">${esc(when + hour)}</span></div>` });
